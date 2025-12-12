@@ -170,12 +170,39 @@ The shortcut workflow:
 
 This ensures the script only runs when PDF files are added, preventing unnecessary processing for other file types.
 
+### Creating the "Ask ChatGPT" Shortcut
+
+The `file-sort.py` script requires an Apple Shortcut named "Ask ChatGPT" to interact with ChatGPT. Follow these exact steps to create it:
+
+1. **Create a new Shortcut** in the Shortcuts app
+   - Name it: `Ask ChatGPT`
+
+2. **Add "Receive"** action:
+   - Configure to receive input from "Nowhere" (allows the shortcut to be called from command line)
+   - Set "If there's no input:" to `Continue`
+   - This allows the shortcut to accept various input types including text from stdin
+
+3. **Add "Get Text"** action:
+   - Get text from: `Shortcut Input`
+   - This extracts the text content from whatever input was received
+
+4. **Add "Use Model"** action:
+   - Model: Select `ChatGPT`
+   - Input: Pass the text from the previous "Get Text" action
+   - This sends the text to ChatGPT and gets a response
+
+5. **Add "Stop and output"** action:
+   - Output: `Response` (from the "Use Model" action)
+   - Set "If there's nowhere to output:" to `Do Nothing`
+   - This returns the ChatGPT response as the shortcut's output
+
 ### Important Notes
 
 - **PDF Filter Required**: The shortcut must check for PDF files before running the script. Without this filter, the shortcut will trigger for every file type added to the folder, which can cause unnecessary processing and errors.
 - **iCloud Drive Considerations**: If using iCloud Drive, allow time for files to fully download before processing. The script includes iCloud download handling, but the automation may need a slight delay.
 - **Testing**: Test the automation with a single PDF file first to ensure it works correctly before relying on it for automatic processing.
 - **Update Path**: Make sure to update the Python script path in the "Run Shell Script" action to match your actual file location.
+- **ChatGPT Shortcut Name**: The shortcut must be named exactly "Ask ChatGPT" for the script to find it when calling `shortcuts run "Ask ChatGPT"`.
 
 ## How It Works
 
