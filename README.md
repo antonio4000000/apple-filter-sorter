@@ -1,19 +1,32 @@
 # Apple File Sorter
 
-An automated document organization system for macOS that uses AI to classify, rename, and sort PDF files into organized folder structures. It's recommended to call this script via an Apple Shortcut that automatically runs when files are added to the directory, enabling fully automatic document sorting.
+An automated document organization system for macOS that uses Claude (via the locally installed Claude Code CLI) to classify, rename, and sort PDF files into organized folder structures. It's recommended to call this script via an Apple Shortcut that automatically runs when files are added to the directory, enabling fully automatic document sorting.
+
+> See [CHANGELOG.md](CHANGELOG.md) for the version history and migration notes (notably the **v2.0.0** swap from ChatGPT to Claude Code + dynamic folder discovery).
 
 ## Overview
 
-This project automatically processes PDF files from a scan inbox folder, extracts their text content, uses ChatGPT to intelligently classify and rename them, and moves them to appropriate folders based on category and subcategory.
+This project automatically processes PDF files from a scan inbox folder, extracts their text content, asks Claude to classify and rename them, and moves them to appropriate folders based on the **live structure of your iCloud Documents directory**. There is no hardcoded taxonomy — adding a new folder in iCloud is all that's needed for Claude to start using it.
+
+Classification happens in two stages per document to keep Claude's prompt small:
+1. **Pick a root folder** (e.g., `Financial`, `Medical`, `Misc.`) from the actual top-level directories.
+2. **Pick a destination path** within that root from the annotated subtree.
+
+Two dynamic exceptions auto-create folders on the fly:
+- **Year-pattern parents** — if every existing child of a parent is a 4-digit year (e.g., `Financial/Receipts/2023, 2024, 2025`), Claude may propose a new year (e.g., `2026`) and the script creates it.
+- **Name-pattern parents** — if every existing child is a single-word proper name (e.g., `Medical/Anthony, Hannah, Oliver, Roman`), Claude may propose a new name (e.g., a relative) and the script creates it.
+
+Any other "new" folder Claude proposes is rejected and the file falls back to `Misc.`.
 
 ## Features
 
 - **Automatic Text Extraction**: Extracts text from PDFs using multiple methods (PyPDF2, pdfplumber, OCR with Tesseract)
-- **AI-Powered Classification**: Uses ChatGPT via Apple Shortcuts to classify documents into predefined categories
+- **AI-Powered Classification**: Uses Claude via the locally installed `claude` CLI — no API key required, uses your existing Claude subscription auth
+- **Live Folder Discovery**: Reads your real iCloud folder tree at runtime; no taxonomy hardcoded in the script
+- **Dynamic Year/Name Subfolders**: Auto-creates year-stamped (e.g., `Financial/Receipts/2026`) or person-name (e.g., `Medical/Sophia`) subfolders when the surrounding pattern is detected
 - **Smart Filenaming**: Generates descriptive filenames in the format `YYYY-MM-DD - Description.pdf` using document content
 - **iCloud Drive Support**: Handles iCloud Drive files, ensuring they're downloaded before processing
 - **Comprehensive Logging**: Creates detailed debug logs and CSV logs of all file movements
-- **Category Organization**: Organizes files into a structured folder hierarchy (Medical, Financial, Career, Cars, etc.)
 
 ## Requirements
 
@@ -27,16 +40,20 @@ This project automatically processes PDF files from a scan inbox folder, extract
 ### System Dependencies
 - **Tesseract OCR**: `brew install tesseract`
 - **Poppler**: `brew install poppler` (for pdf2image)
-- **Apple Shortcuts**: Requires a shortcut named "Ask ChatGPT" that accepts text input
+- **Claude Code CLI**: The `claude` command must be on `PATH` and already authenticated with your Anthropic account (see [Claude Code installation](https://docs.claude.com/en/docs/claude-code/quickstart)). The script invokes `claude -p` non-interactively and uses your existing subscription auth — no API key needed.
 
 ### Installation
 
 ```bash
 # Install Python dependencies
-pip install PyPDF2 pdfplumber pytesseract pdf2image striprtf
+pip install PyPDF2 pdfplumber pytesseract pdf2image
 
 # Install system dependencies (macOS)
 brew install tesseract poppler
+
+# Verify Claude Code is installed and you're logged in
+claude --version
+claude -p "ready" --output-format text >/dev/null && echo "Claude is reachable"
 ```
 
 ## Usage
@@ -52,10 +69,11 @@ python file-sort.py
 The script will:
 1. Find all PDF files in the configured scan inbox folder
 2. Extract text from each PDF
-3. Classify the document using ChatGPT
-4. Generate a descriptive filename
-5. Move the file to the appropriate category folder
-6. Log all operations to debug logs and a CSV file
+3. Ask Claude (Stage 1) to pick a root folder from your live iCloud Documents tree
+4. Ask Claude (Stage 2) to pick the destination subfolder from the annotated subtree
+5. Ask Claude to generate a descriptive filename
+6. Move the file to the chosen destination (creating year/name subfolders on the fly when the pattern allows)
+7. Log all operations to debug logs and a CSV file
 
 ### Utility Script: `view-ocr.py`
 
@@ -86,25 +104,17 @@ The script uses hardcoded paths that you'll need to customize:
 
 ### Categories
 
-The system supports a wide range of categories including:
+There is **no hardcoded category list** — Claude sees whatever root folders currently exist under `Documents Base` (minus hidden folders and the scan inbox). Create or rename folders in iCloud and the script picks them up on the next run.
 
-- **Medical** (with patient name subcategories)
-- **Financial** (Bills, Cards, Checks, Insurance, Taxes, Receipts, etc.)
-- **Career** (Certifications, Resumes, Business Cards)
-- **Cars** (vehicle-specific subcategories)
-- **Kids/School**
-- **Personal** (Government Documents, Letters, Spiritual)
-- **Purchases** (Tickets, Product Manuals, Other)
-- **Sheet Music**, **Recipes**, **User Manuals**, **Misc**
+For Claude to recognise that a parent folder accepts dynamic subfolders, the script inspects the *existing children* of each parent:
 
-See `CATEGORY_STRUCTURE` in `file-sort.py` for the complete list and folder mappings.
+| Existing children look like              | Pattern detected | Claude may propose                          |
+|------------------------------------------|------------------|---------------------------------------------|
+| `2023`, `2024`, `2025`                   | year             | A new 4-digit year (e.g., `2026`)           |
+| `Anthony`, `Hannah`, `Oliver`, `Roman`   | name             | A new single-word proper name (e.g., `Sophia`) |
+| Anything else / mixed / <2 children      | strict           | Only an existing child folder               |
 
-### Apple Shortcuts Setup
-
-The script requires an Apple Shortcut named "Ask ChatGPT" that:
-- Accepts text input via stdin (`--input-path -`)
-- Returns RTF-formatted text output
-- Can be called via: `shortcuts run "Ask ChatGPT" --input-path -`
+The detector requires at least 2 sibling folders to declare a pattern — that prevents a single one-off folder being misread.
 
 ## Automation Setup
 
@@ -168,33 +178,7 @@ The shortcut workflow:
 4. Sets `RunScript` to "Yes" if at least one PDF is found
 5. Only runs the Python script if `RunScript` is "Yes"
 
-This ensures the script only runs when PDF files are added, preventing unnecessary processing for other file types.
-
-### Creating the "Ask ChatGPT" Shortcut
-
-The `file-sort.py` script requires an Apple Shortcut named "Ask ChatGPT" to interact with ChatGPT. Follow these exact steps to create it:
-
-1. **Create a new Shortcut** in the Shortcuts app
-   - Name it: `Ask ChatGPT`
-
-2. **Add "Receive"** action:
-   - Configure to receive input from "Nowhere" (allows the shortcut to be called from command line)
-   - Set "If there's no input:" to `Continue`
-   - This allows the shortcut to accept various input types including text from stdin
-
-3. **Add "Get Text"** action:
-   - Get text from: `Shortcut Input`
-   - This extracts the text content from whatever input was received
-
-4. **Add "Use Model"** action:
-   - Model: Select `ChatGPT`
-   - Input: Pass the text from the previous "Get Text" action
-   - This sends the text to ChatGPT and gets a response
-
-5. **Add "Stop and output"** action:
-   - Output: `Response` (from the "Use Model" action)
-   - Set "If there's nowhere to output:" to `Do Nothing`
-   - This returns the ChatGPT response as the shortcut's output
+This ensures the script only runs when PDF files are added, preventing unnecessary processing for other file types. The script itself then shells out to the locally installed `claude` CLI for classification and filename generation.
 
 ### Important Notes
 
@@ -202,7 +186,8 @@ The `file-sort.py` script requires an Apple Shortcut named "Ask ChatGPT" to inte
 - **iCloud Drive Considerations**: If using iCloud Drive, allow time for files to fully download before processing. The script includes iCloud download handling, but the automation may need a slight delay.
 - **Testing**: Test the automation with a single PDF file first to ensure it works correctly before relying on it for automatic processing.
 - **Update Path**: Make sure to update the Python script path in the "Run Shell Script" action to match your actual file location.
-- **ChatGPT Shortcut Name**: The shortcut must be named exactly "Ask ChatGPT" for the script to find it when calling `shortcuts run "Ask ChatGPT"`.
+- **Claude must be on PATH for the Shortcut shell**: Apple Shortcuts launches shell scripts with a minimal `PATH`. The script's `setup_environment()` prepends common locations (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.claude/local/bin`, `~/.npm-global/bin`) so that `claude` resolves. If your install is elsewhere, add it to that list or symlink the binary into one of those directories.
+- **Claude subscription rate limits**: Each PDF triggers ~3 `claude -p` calls (root pick, subtree pick, filename). Heavy batch runs can hit your 5-hour usage cap.
 
 ## How It Works
 
@@ -210,13 +195,15 @@ The `file-sort.py` script requires an Apple Shortcut named "Ask ChatGPT" to inte
    - Direct text extraction (PyPDF2, pdfplumber)
    - OCR fallback for scanned/image-based PDFs
 
-2. **Classification**: Sends document content to ChatGPT with category definitions and asks for classification
+2. **Classification (Stage 1 — root pick)**: Sends the document text plus the live list of root folders in your iCloud Documents tree to `claude -p`. Claude returns one folder name.
 
-3. **Filename Generation**: Uses ChatGPT to generate a descriptive filename following the format `YYYY-MM-DD - Description`, prioritizing dates found in the document
+3. **Classification (Stage 2 — destination pick)**: Walks the chosen root recursively, tags each parent with `[year-pattern]` or `[name-pattern]` if its existing children fit that shape, and sends the annotated tree to Claude. Claude returns a full relative path. The script validates the path exists (or is a permitted dynamic year/name extension) before accepting it.
 
-4. **File Organization**: Moves files to the appropriate folder based on category and subcategory
+4. **Filename Generation**: Asks Claude to generate a descriptive filename following the format `YYYY-MM-DD - Description`, prioritizing dates found in the document.
 
-5. **Logging**: Creates timestamped debug logs and maintains a CSV log of all file movements
+5. **File Organization**: Moves the file to the chosen destination, creating year/name subfolders on the fly when allowed. If Claude proposes an invalid folder, falls back to `Misc.` with a loud warning in the debug log.
+
+6. **Logging**: Creates timestamped debug logs and maintains a CSV log of all file movements.
 
 ## Log Files
 
