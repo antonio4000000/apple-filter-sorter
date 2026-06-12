@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.4.0] — 2026-06-12
+
+### Added
+- `file_move_log.csv` gains a fifth column, `Manual Update Notes`, for hand-written annotations when a file is later moved/renamed manually. `log_file_move()` writes it empty, preserves existing notes, and pads old 4-column rows in place.
+
+### Changed
+- `call_claude()` now invokes `claude -p --model sonnet` (was `haiku`) for better classification and date/year extraction accuracy.
+
+### Fixed
+- Inbox scan now matches the `.pdf` extension case-insensitively in `main()` — files saved as `.PDF` were silently skipped by the old `glob("*.pdf")`.
+
+## [2.3.0] — 2026-06-12
+
+### Added
+- Year-only filenames: when a document identifies only a year (e.g., the tax year on a W-2/1099/1095), the filename is now `YYYY - Description` instead of falling back to the file created date. Prompt, `sanitize_filename()`, and the already-formatted skip check in `main()` all accept the new variant.
+- OCR orientation correction in `extract_text_from_pdf()`: each page is checked with tesseract OSD and rotated before OCR, so upside-down/sideways scans no longer extract as gibberish.
+
+### Changed
+- `SUBTREE_PICK_PROMPT_TEMPLATE`: tax documents must be filed under the tax year printed on the form — never today's year or a guess; if no tax year is legible, the parent tax folder is used without a year subfolder.
+
+### Fixed
+- `parse_root_response()` now ignores trailing dots/spaces when matching root folders, so a response like `Misc.` matches a folder named `Misc. `.
+
+## [2.2.0] — 2026-06-12
+
+### Added
+- **Usage-limit aware retries.** `call_claude()` now detects Claude Code's `usage limit reached` response, parses the reset timestamp from it, and raises a new `ClaudeUsageLimitError(reset_at)`.
+- **`schedule_retry()`** installs a one-shot macOS LaunchAgent that re-runs the script shortly after the limit resets (survives sleep/logout/reboot, then removes itself). Falls back to a +1 hour retry if no reset time is present in the response.
+- `parse_reset_time()` helper to extract the epoch (seconds or milliseconds) from the limit message.
+
+### Changed
+- `main()` now catches `ClaudeUsageLimitError`, stops the current run leaving unprocessed files untouched in the inbox, and schedules the automatic retry instead of treating the limit as a fatal error.
+
 ## [2.1.0] — 2026-05-28
 
 ### Changed
